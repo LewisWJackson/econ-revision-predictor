@@ -1,0 +1,24 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test/dev artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+default.profraw
