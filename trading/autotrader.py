@@ -49,6 +49,7 @@ from trading.live_calendar import LiveCalendar, INDICATOR_NAMES, load_consensus_
 from trading.strategy import RevisionStrategy, INDICATOR_TRADES
 from trading.alerts import AlertManager
 from trading.economic_calendar import REVISION_BIASES
+from trading.consensus_fetcher import fetch_consensus
 
 logger = logging.getLogger("autotrader")
 
@@ -192,17 +193,27 @@ class AutoTrader:
             self._sleep_until_tomorrow()
             return
 
-        # 2. Show today's schedule
+        # 2. Auto-fetch consensus from ForexFactory
+        logger.info("Fetching consensus forecasts from ForexFactory...")
+        ff_data = fetch_consensus()
+
+        for r in todays:
+            if r.consensus is None and r.indicator_code in ff_data:
+                r.consensus = ff_data[r.indicator_code].get("consensus")
+                r.previous = r.previous or ff_data[r.indicator_code].get("previous")
+
+        # 3. Show today's schedule
         logger.info(f"Today's releases ({len(todays)}):")
         for r in todays:
             release_time = RELEASE_TIMES_ET.get(r.indicator_code, "08:30")
-            consensus_str = f" (consensus: {r.consensus})" if r.consensus else " (NO CONSENSUS SET)"
+            consensus_str = f" (consensus: {r.consensus})" if r.consensus else " (no consensus yet)"
             logger.info(f"  {release_time} ET - {r.indicator_name}{consensus_str}")
 
         self.alerts.send_all(
             "Today's Releases",
             "\n".join(
-                f"- {RELEASE_TIMES_ET.get(r.indicator_code, '08:30')} ET: {r.indicator_name}"
+                f"- {RELEASE_TIMES_ET.get(r.indicator_code, '08:30')} ET: "
+                f"{r.indicator_name} (forecast: {r.consensus or 'TBD'})"
                 for r in todays
             ),
         )
@@ -264,25 +275,39 @@ class AutoTrader:
         obs_date, actual = result
         logger.info(f"RELEASE DETECTED: {indicator} = {actual} (date: {obs_date})")
 
-        # Get consensus
+        # Get consensus — fully automatic
         consensus = release.consensus
+        previous = release.previous
+
         if consensus is None:
-            # Try consensus cache
+            # Try ForexFactory auto-fetch (free, no API key)
+            logger.info(f"Fetching consensus from ForexFactory for {indicator}...")
+            ff_data = fetch_consensus()
+            if indicator in ff_data:
+                consensus = ff_data[indicator].get("consensus")
+                previous = previous or ff_data[indicator].get("previous")
+                logger.info(f"ForexFactory consensus for {indicator}: {consensus}")
+
+        if consensus is None:
+            # Try manual consensus cache as fallback
             cache = load_consensus_cache()
             key = f"{indicator}_{date.today().isoformat()}"
             cached = cache.get(key, {})
             consensus = cached.get("consensus")
+            previous = previous or cached.get("previous")
 
         if consensus is None:
-            logger.warning(f"No consensus for {indicator}. Cannot generate signal.")
-            self.alerts.send_all(
-                f"{release.indicator_name} Released",
-                f"Actual: {actual}\nNo consensus set - cannot trade.\n"
-                f"Set consensus with: cal.set_consensus('{indicator}', '{date.today()}', consensus, previous)",
-            )
-            return
-
-        previous = release.previous
+            # Last resort: use previous value as pseudo-consensus
+            if previous is not None:
+                consensus = previous
+                logger.warning(f"No consensus found for {indicator}. Using previous value ({previous}) as proxy.")
+            else:
+                logger.warning(f"No consensus or previous value for {indicator}. Skipping.")
+                self.alerts.send_all(
+                    f"{release.indicator_name} Released",
+                    f"Actual: {actual}\nNo consensus available - skipped.",
+                )
+                return
 
         # Generate trading signal
         self._execute_signal(indicator, actual, consensus, previous or actual)
