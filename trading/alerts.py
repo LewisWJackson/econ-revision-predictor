@@ -192,6 +192,11 @@ class AlertManager:
                 results[channel] = notifier.send(alert)
         return results
 
+    def send_all(self, title: str, message: str, priority: str = "normal") -> Dict[str, bool]:
+        """Convenience: send a simple text alert to all channels."""
+        alert = Alert(title=title, message=message, priority=priority)
+        return self.send_alert(alert)
+
     def release_imminent(self, event_name: str, minutes_until: int, revision_bias: str):
         """Alert that a release is coming soon."""
         alert = Alert(
